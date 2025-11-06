@@ -1,0 +1,1 @@
+Agrega aquí icon-192.png y icon-512.png (PNG). Actualiza manifest.json si cambias nombres o tamaños.
