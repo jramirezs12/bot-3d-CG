@@ -22,7 +22,11 @@ export default function ChatUI(){
       })
       const data = await res.json()
       const reply = data?.reply || 'Lo siento, no pude obtener respuesta.'
-      const botMsg = { from:'bot', text: reply }
+      const analysis = data?.analysis || null
+      const debugSuffix = analysis
+        ? ` [intent: ${analysis.intent}, sentiment: ${analysis.sentiment}]`
+        : ''
+      const botMsg = { from:'bot', text: reply + debugSuffix }
       setMessages(m => [...m, botMsg])
 
       // TTS (Web Speech API)
