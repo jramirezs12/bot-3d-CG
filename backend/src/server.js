@@ -2,6 +2,7 @@ import express from 'express'
 import fetch from 'node-fetch'
 import cors from 'cors'
 import dotenv from 'dotenv'
+import { loadModel, calculateSimilarity, classifyIntent, analyzeSentiment } from './prediction.js'
 
 dotenv.config()
 const app = express()
@@ -17,8 +18,45 @@ if(!OPENAI_KEY){
   console.warn('ADVERTENCIA: No se encontró OPENAI_API_KEY en .env')
 }
 
+let modelReady = false
+loadModel()
+  .then(() => {
+    modelReady = true
+    console.log('Modelo USE cargado y listo.')
+  })
+  .catch(err => {
+    console.error('Error al cargar el modelo USE:', err)
+  })
+
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'pwa-webar-bot-backend' })
+  res.json({ ok: true, service: 'pwa-webar-bot-backend', modelReady })
+})
+
+app.post('/api/analyze', async (req, res) => {
+  if (!modelReady) return res.status(503).json({ error: 'Modelo no disponible aún, intenta más tarde.' })
+  const { text } = req.body || {}
+  if (!text) return res.status(400).json({ error: 'Falta text' })
+  try {
+    const intentResult = await classifyIntent(text)
+    const sentimentResult = analyzeSentiment(text)
+    res.json({ intent: intentResult.intent, confidence: intentResult.confidence, scores: intentResult.scores, ...sentimentResult })
+  } catch (err) {
+    console.error('Error en /api/analyze:', err)
+    res.status(500).json({ error: 'Error al analizar el texto.' })
+  }
+})
+
+app.post('/api/similarity', async (req, res) => {
+  if (!modelReady) return res.status(503).json({ error: 'Modelo no disponible aún, intenta más tarde.' })
+  const { text1, text2 } = req.body || {}
+  if (!text1 || !text2) return res.status(400).json({ error: 'Faltan text1 y/o text2' })
+  try {
+    const similarity = await calculateSimilarity(text1, text2)
+    res.json({ similarity, similar: similarity >= 0.7 })
+  } catch (err) {
+    console.error('Error en /api/similarity:', err)
+    res.status(500).json({ error: 'Error al calcular similitud.' })
+  }
 })
 
 app.post('/api/chat', async (req,res)=>{
@@ -26,11 +64,31 @@ app.post('/api/chat', async (req,res)=>{
     const { message } = req.body || {}
     if (!message) return res.status(400).json({ error: 'Falta message' })
 
+    // Análisis opcional (no bloquea el chat si falla o el modelo no está listo)
+    let analysis = null
+    if (modelReady) {
+      try {
+        const intentResult = await classifyIntent(message)
+        const sentimentResult = analyzeSentiment(message)
+        analysis = { intent: intentResult.intent, confidence: intentResult.confidence, ...sentimentResult }
+      } catch (analysisErr) {
+        console.warn('Análisis falló, continuando sin él:', analysisErr.message)
+      }
+    }
+
+    // Ajustar system prompt según análisis
+    let systemContent = 'Eres un bot cartoon amable y breve. Responde en español.'
+    if (analysis?.intent === 'farewell') {
+      systemContent += ' El usuario se está despidiendo, responde de forma cálida y breve.'
+    } else if (analysis?.sentiment === 'negative') {
+      systemContent += ' El usuario parece frustrado, responde con empatía.'
+    }
+
     // Cuerpo para Chat Completions
     const body = {
       model: OPENAI_MODEL,
       messages: [
-        { role: 'system', content: 'Eres un bot cartoon amable y breve. Responde en español.' },
+        { role: 'system', content: systemContent },
         { role: 'user', content: message }
       ]
     }
@@ -52,7 +110,7 @@ app.post('/api/chat', async (req,res)=>{
 
     const json = await r.json()
     const reply = json?.choices?.[0]?.message?.content?.trim() || 'Lo siento, no pude obtener respuesta.'
-    res.json({ reply })
+    res.json({ reply, analysis })
   }catch(err){
     console.error(err)
     res.status(500).json({ error: 'error interno' })
