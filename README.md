@@ -80,7 +80,52 @@ npm run preview
 - No subas tu `OPENAI_API_KEY` a repos públicos.
 - Usa `.env` y mantén el repo privado si es necesario.
 
-## Roadmap / Mejoras
+## Módulo de Predicción (TensorFlow.js + USE)
+
+El backend incorpora un módulo de predicción basado en [Universal Sentence Encoder (USE)](https://www.tensorflow.org/hub/tutorials/semantic_similarity_with_tf_hub_universal_encoder) para análisis de intención y sentimiento.
+
+> **Nota:** La primera carga del modelo USE puede tardar varios segundos (descarga de pesos ~25 MB). Durante ese tiempo los endpoints `/api/analyze` y `/api/similarity` responden `503`. El endpoint `/api/chat` continúa funcionando sin análisis hasta que el modelo esté listo.
+
+### Nuevos endpoints
+
+#### `POST /api/analyze`
+Analiza la intención y sentimiento de un texto.
+
+Request:
+```json
+{ "text": "hola, ¿puedes ayudarme?" }
+```
+Response:
+```json
+{
+  "intent": "greeting",
+  "confidence": 0.92,
+  "scores": { "greeting": 0.92, "help": 0.75, ... },
+  "sentiment": "neutral",
+  "score": 0
+}
+```
+
+#### `POST /api/similarity`
+Calcula la similitud coseno entre dos textos.
+
+Request:
+```json
+{ "text1": "buenos días", "text2": "hola, ¿cómo estás?" }
+```
+Response:
+```json
+{ "similarity": 0.81, "similar": true }
+```
+
+### Instalación (con nuevas dependencias)
+
+```
+cd backend
+npm install
+```
+
+
 - Animaciones del avatar (blend shapes, gestos cuando responde).
 - STT (SpeechRecognition) para dictado de voz.
 - TTS avanzado (Azure/Google/ElevenLabs) desde el backend.
