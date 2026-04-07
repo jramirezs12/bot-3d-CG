@@ -7,12 +7,13 @@ import { loadModel, calculateSimilarity, classifyIntent, analyzeSentiment } from
 dotenv.config()
 const app = express()
 app.use(cors())
-app.use(express.json())
+app.use(express.json({ limit: '50mb' }))
 
 const PORT = process.env.PORT || 3001
 const OPENAI_KEY = process.env.OPENAI_API_KEY
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
+const RAG_SERVICE_URL = process.env.RAG_SERVICE_URL || 'http://localhost:8000'
 
 if(!OPENAI_KEY){
   console.warn('ADVERTENCIA: No se encontró OPENAI_API_KEY en .env')
@@ -116,5 +117,76 @@ app.post('/api/chat', async (req,res)=>{
     res.status(500).json({ error: 'error interno' })
   }
 })
+
+// ── RAG multimodal ──────────────────────────────────────────────────────────
+
+/**
+ * GET /api/rag/health
+ * Comprueba el estado del servicio RAG Python.
+ */
+app.get('/api/rag/health', async (_req, res) => {
+  try {
+    const r = await fetch(`${RAG_SERVICE_URL}/health`, { signal: AbortSignal.timeout(5000) })
+    const json = await r.json()
+    res.json(json)
+  } catch (err) {
+    res.status(503).json({ ok: false, error: 'Servicio RAG no disponible.', detail: err.message })
+  }
+})
+
+/**
+ * POST /api/rag/query
+ * Body: { question: string }
+ * Responde con la respuesta generada por el pipeline RAG.
+ */
+app.post('/api/rag/query', async (req, res) => {
+  const { question } = req.body || {}
+  if (!question) return res.status(400).json({ error: 'Falta el campo "question".' })
+  try {
+    const r = await fetch(`${RAG_SERVICE_URL}/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+      signal: AbortSignal.timeout(60000)
+    })
+    if (!r.ok) {
+      const text = await r.text()
+      return res.status(r.status).json({ error: text })
+    }
+    const json = await r.json()
+    res.json(json)
+  } catch (err) {
+    console.error('Error en /api/rag/query:', err)
+    res.status(502).json({ error: 'Error al contactar el servicio RAG.', detail: err.message })
+  }
+})
+
+/**
+ * POST /api/rag/upload
+ * Reenvía un PDF (multipart/form-data) al servicio RAG para indexación.
+ */
+app.post('/api/rag/upload', async (req, res) => {
+  try {
+    // Reenviar el body multipart directamente al servicio Python
+    const contentType = req.headers['content-type'] || ''
+    const r = await fetch(`${RAG_SERVICE_URL}/upload`, {
+      method: 'POST',
+      headers: { 'content-type': contentType },
+      body: req,
+      signal: AbortSignal.timeout(300000)
+    })
+    if (!r.ok) {
+      const text = await r.text()
+      return res.status(r.status).json({ error: text })
+    }
+    const json = await r.json()
+    res.json(json)
+  } catch (err) {
+    console.error('Error en /api/rag/upload:', err)
+    res.status(502).json({ error: 'Error al subir el archivo al servicio RAG.', detail: err.message })
+  }
+})
+
+// ── Servidor ─────────────────────────────────────────────────────────────────
 
 app.listen(PORT, ()=> console.log(`Backend escuchando en http://localhost:${PORT}`))
