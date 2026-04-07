@@ -47,7 +47,6 @@ def _try_load_index() -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Crear directorios necesarios
-    setup_module.setup.__globals__["DATA_DIR"]  # asegurar importación
     os.makedirs(index_module.CHROMA_DIR, exist_ok=True)
     os.makedirs(preprocess_module.IMAGES_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(preprocess_module.CACHE_FILE), exist_ok=True)
