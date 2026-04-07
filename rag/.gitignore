@@ -1,0 +1,8 @@
+# Datos generados en tiempo de ejecución
+data/images/
+data/cache/
+data/chroma_db/
+data/*.pdf
+__pycache__/
+*.pyc
+.env
