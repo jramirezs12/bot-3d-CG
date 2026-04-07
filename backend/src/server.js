@@ -167,12 +167,16 @@ app.post('/api/rag/query', async (req, res) => {
  */
 app.post('/api/rag/upload', async (req, res) => {
   try {
-    // Reenviar el body multipart directamente al servicio Python
     const contentType = req.headers['content-type'] || ''
+    // Bufferizar el cuerpo sin procesar (Express no consume multipart)
+    const chunks = []
+    for await (const chunk of req) chunks.push(chunk)
+    const buffer = Buffer.concat(chunks)
+
     const r = await fetch(`${RAG_SERVICE_URL}/upload`, {
       method: 'POST',
       headers: { 'content-type': contentType },
-      body: req,
+      body: buffer,
       signal: AbortSignal.timeout(300000)
     })
     if (!r.ok) {
