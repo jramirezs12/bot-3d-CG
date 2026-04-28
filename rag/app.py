@@ -1,40 +1,44 @@
 """
-app.py — Servicio FastAPI que expone el pipeline de RAG multimodal.
+app.py — Servicio FastAPI: RAG multimodal + Clasificador de Intenciones.
 
 Endpoints:
-  GET  /health           — estado del servicio e índice
-  POST /upload           — sube un PDF, lo procesa e indexa
-  POST /query            — hace una pregunta al RAG pipeline
-  POST /rebuild-index    — re-indexa todos los PDFs ya procesados
+  GET  /health              — estado del servicio
+  POST /classify-intent     — clasifica la intención de un texto
+  POST /query               — pipeline RAG completo (intención → búsqueda → respuesta)
+  POST /upload              — sube PDF, lo procesa e indexa
+  POST /index-catalog       — indexa el catálogo de laptops en ChromaDB
+  POST /rebuild-index       — re-indexa PDFs desde caché
 """
 
+from __future__ import annotations
+
 import os
-import shutil
-import tempfile
+import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Ajustar sys.path para imports relativos dentro del paquete rag/
-import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
 import setup as setup_module
 import preprocess as preprocess_module
 import index as index_module
 import query as query_module
+import catalog_indexer
+from intent_classifier import get_classifier, classify_intent
 
 # ---------------------------------------------------------------------------
-# Estado global del servicio
+# Estado global
 # ---------------------------------------------------------------------------
 
 _index_ready = False
+_catalog_ready = False
+_classifier_ready = False
 
 
 def _try_load_index() -> bool:
-    """Intenta cargar el índice existente. Devuelve True si tiene documentos."""
     global _index_ready
     try:
         collection = index_module.get_or_create_collection()
@@ -44,25 +48,50 @@ def _try_load_index() -> bool:
     return _index_ready
 
 
+def _try_load_catalog() -> bool:
+    global _catalog_ready
+    _catalog_ready = catalog_indexer.catalog_is_ready()
+    return _catalog_ready
+
+
+def _try_load_classifier() -> bool:
+    global _classifier_ready
+    try:
+        clf = get_classifier()
+        _classifier_ready = clf.pipeline is not None
+    except Exception:
+        _classifier_ready = False
+    return _classifier_ready
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Crear directorios necesarios
     os.makedirs(index_module.CHROMA_DIR, exist_ok=True)
     os.makedirs(preprocess_module.IMAGES_DIR, exist_ok=True)
     os.makedirs(os.path.dirname(preprocess_module.CACHE_FILE), exist_ok=True)
+
     _try_load_index()
-    print(f"RAG service iniciado. Índice listo: {_index_ready}")
+    _try_load_catalog()
+    _try_load_classifier()
+
+    print(f"RAG service iniciado.")
+    print(f"  PDFs indexados   : {_index_ready}")
+    print(f"  Catálogo listo   : {_catalog_ready}")
+    print(f"  Clasificador     : {_classifier_ready}")
     yield
 
 
 # ---------------------------------------------------------------------------
-# Aplicación
+# App
 # ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="Multimodal RAG Service",
-    description="Servicio de RAG multimodal para consultas sobre documentos con imágenes.",
-    version="1.0.0",
+    title="Ktronix RAG + Intent Service",
+    description=(
+        "Pipeline conversacional para e-commerce de laptops: "
+        "clasificación de intenciones + RAG sobre catálogo de productos."
+    ),
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -81,17 +110,34 @@ app.add_middleware(
 
 class QueryRequest(BaseModel):
     question: str
+    intent: str | None = None  # Opcional: si ya se clasificó antes
 
 
 class QueryResponse(BaseModel):
     answer: str
     sources: list[str]
     pages_found: int
+    intent: str
+    source_type: str
+
+
+class IntentRequest(BaseModel):
+    text: str
+
+
+class IntentResponse(BaseModel):
+    intent: str
+    confidence: float
+    scores: dict[str, float]
+    needs_rag: bool
+    system_prompt: str
 
 
 class StatusResponse(BaseModel):
     ok: bool
     index_ready: bool
+    catalog_ready: bool
+    classifier_ready: bool
     document_count: int
     service: str
 
@@ -112,24 +158,63 @@ def health():
     return StatusResponse(
         ok=True,
         index_ready=_index_ready,
+        catalog_ready=_catalog_ready,
+        classifier_ready=_classifier_ready,
         document_count=doc_count,
-        service="multimodal-rag",
+        service="ktronix-rag-intent",
     )
+
+
+@app.post("/classify-intent", response_model=IntentResponse)
+def classify_intent_endpoint(body: IntentRequest):
+    """
+    Clasifica la intención de un texto.
+
+    Intenciones: recomendacion, especificaciones, precio, comparacion,
+                 disponibilidad, soporte_tecnico, saludo, despedida, otro
+    """
+    if not _classifier_ready:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "El clasificador de intenciones no está listo. "
+                "Ejecuta train_intent.py primero."
+            ),
+        )
+    result = classify_intent(body.text)
+    return IntentResponse(**result)
 
 
 @app.post("/query", response_model=QueryResponse)
 def query_rag(body: QueryRequest):
-    if not _index_ready:
-        raise HTTPException(
-            status_code=503,
-            detail="El índice RAG no está listo. Sube un PDF primero.",
-        )
-    result = query_module.answer_question_safe(body.question)
+    """
+    Pipeline completo:
+      1. Clasificar intención (si no se provee)
+      2. Buscar en catálogo o PDFs según intención
+      3. Generar respuesta contextualizada con GPT-4o
+    """
+    result = query_module.answer_question_safe(body.question, body.intent)
     return QueryResponse(
         answer=result["answer"],
         sources=result["sources"],
         pages_found=result["pages_found"],
+        intent=result.get("intent", "otro"),
+        source_type=result.get("source_type", "unknown"),
     )
+
+
+@app.post("/index-catalog")
+def index_catalog():
+    """Indexa o re-indexa el catálogo de laptops en ChromaDB."""
+    global _catalog_ready
+    try:
+        count = catalog_indexer.build_catalog_index()
+        _catalog_ready = True
+        return {"ok": True, "products_indexed": count}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al indexar catálogo: {e}")
 
 
 @app.post("/upload")
@@ -140,7 +225,6 @@ async def upload_pdf(file: UploadFile = File(...)):
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Solo se aceptan archivos PDF.")
 
-    # Guardar el PDF en el directorio de datos
     safe_name = os.path.basename(file.filename)
     dest_path = os.path.join(preprocess_module.DATA_DIR, safe_name)
 
@@ -148,7 +232,6 @@ async def upload_pdf(file: UploadFile = File(...)):
         content = await file.read()
         f.write(content)
 
-    # Procesar el PDF recién subido
     try:
         pages = preprocess_module.preprocess_pdfs(pdf_dir=preprocess_module.DATA_DIR)
     except Exception as e:
@@ -157,18 +240,13 @@ async def upload_pdf(file: UploadFile = File(...)):
     if not pages:
         raise HTTPException(status_code=422, detail="No se pudieron extraer páginas del PDF.")
 
-    # Re-construir el índice
     try:
         index_module.build_index(pages)
         _index_ready = True
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al indexar: {e}")
 
-    return {
-        "ok": True,
-        "filename": safe_name,
-        "pages_indexed": len(pages),
-    }
+    return {"ok": True, "filename": safe_name, "pages_indexed": len(pages)}
 
 
 @app.post("/rebuild-index")
@@ -194,6 +272,5 @@ def rebuild_index():
 
 if __name__ == "__main__":
     import uvicorn
-
     port = int(os.environ.get("RAG_PORT", "8000"))
     uvicorn.run("app:app", host="0.0.0.0", port=port, reload=False)
