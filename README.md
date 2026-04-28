@@ -63,7 +63,7 @@ npm start
 cd rag
 python -m venv .venv && source .venv/bin/activate   # (Windows: .venv\Scripts\activate)
 pip install -r requirements.txt
-export OPENAI_API_KEY=...
+export OPENAI_API_KEY=TU_GROQ_API_KEY_AQUI
 # Opcional: descarga PDFs de ejemplo de instrucciones IKEA
 python setup.py
 # Inicia el servicio FastAPI en http://localhost:8000
