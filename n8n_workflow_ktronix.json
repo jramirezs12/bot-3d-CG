@@ -1,0 +1,166 @@
+{
+  "name": "Ktronix Bot - Pipeline Completo",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ktronix-bot",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook",
+      "name": "Recibir Mensaje",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [160, 300],
+      "webhookId": "ktronix-bot-001"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/classify-intent",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.body.message }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 5000
+        }
+      },
+      "id": "node-classify",
+      "name": "Clasificar Intencion",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-needs-rag",
+              "leftValue": "={{ $json.needs_rag }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if",
+      "name": "Necesita RAG",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8000/query",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "question",
+              "value": "={{ $('Recibir Mensaje').item.json.body.message }}"
+            },
+            {
+              "name": "intent",
+              "value": "={{ $('Clasificar Intencion').item.json.intent }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "node-rag",
+      "name": "Consultar RAG Catalogo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 160]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3001/api/chat",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "message",
+              "value": "={{ $('Recibir Mensaje').item.json.body.message }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "node-llm",
+      "name": "Respuesta LLM Directa",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 440]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ reply: $json.answer || $json.reply || 'Sin respuesta', intent: $('Clasificar Intencion').item.json.intent, confidence: $('Clasificar Intencion').item.json.confidence, needs_rag: $('Clasificar Intencion').item.json.needs_rag, source_type: $json.source_type || 'llm' }) }}",
+        "options": {}
+      },
+      "id": "node-respond",
+      "name": "Enviar Respuesta",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, 300]
+    }
+  ],
+  "connections": {
+    "Recibir Mensaje": {
+      "main": [
+        [{ "node": "Clasificar Intencion", "type": "main", "index": 0 }]
+      ]
+    },
+    "Clasificar Intencion": {
+      "main": [
+        [{ "node": "Necesita RAG", "type": "main", "index": 0 }]
+      ]
+    },
+    "Necesita RAG": {
+      "main": [
+        [{ "node": "Consultar RAG Catalogo", "type": "main", "index": 0 }],
+        [{ "node": "Respuesta LLM Directa", "type": "main", "index": 0 }]
+      ]
+    },
+    "Consultar RAG Catalogo": {
+      "main": [
+        [{ "node": "Enviar Respuesta", "type": "main", "index": 0 }]
+      ]
+    },
+    "Respuesta LLM Directa": {
+      "main": [
+        [{ "node": "Enviar Respuesta", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": []
+}

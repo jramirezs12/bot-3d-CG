@@ -1,6 +1,8 @@
 """
 preprocess.py — Convierte PDFs a imágenes y genera descripciones con GPT-4o.
 """
+from __future__ import annotations
+
 import os
 import json
 import base64

@@ -1,6 +1,8 @@
 """
 index.py — Genera embeddings y los almacena en ChromaDB.
 """
+from __future__ import annotations
+
 import os
 import json
 from openai import OpenAI

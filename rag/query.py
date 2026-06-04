@@ -24,6 +24,7 @@ from intent_classifier import (
 )
 
 TOP_K = 3
+LLM_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
 _client: OpenAI | None = None
 
@@ -31,7 +32,8 @@ _client: OpenAI | None = None
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI()
+        base_url = os.environ.get("OPENAI_BASE_URL")
+        _client = OpenAI(base_url=base_url) if base_url else OpenAI()
     return _client
 
 
@@ -73,7 +75,7 @@ def generate_answer_catalog(
     sources = [r["metadata"]["nombre"] for r in catalog_results]
 
     response = _get_client().chat.completions.create(
-        model="gpt-4o",
+        model=LLM_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {
@@ -132,7 +134,7 @@ def generate_answer_pdfs(
     if not image_content:
         context = "\n\n".join(retrieved_results["documents"][0])
         response = _get_client().chat.completions.create(
-            model="gpt-4o",
+            model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Pregunta: {query}\n\nContexto:\n{context}"},
@@ -142,7 +144,7 @@ def generate_answer_pdfs(
         return response.choices[0].message.content, sources
 
     response = _get_client().chat.completions.create(
-        model="gpt-4o",
+        model=LLM_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {
@@ -207,7 +209,7 @@ def answer_question(query: str, intent: str | None = None) -> dict:
     # Sin RAG: responder solo con LLM guiado por intención
     system_prompt = INTENT_SYSTEM_PROMPTS.get(current_intent, INTENT_SYSTEM_PROMPTS["otro"])
     response = _get_client().chat.completions.create(
-        model="gpt-4o",
+        model=LLM_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": query},

@@ -16,7 +16,7 @@ import json
 import os
 
 import chromadb
-from openai import OpenAI
+from sentence_transformers import SentenceTransformer
 
 # ---------------------------------------------------------------------------
 # Rutas y constantes
@@ -28,7 +28,7 @@ CATALOG_PATH = os.path.join(DATA_DIR, "catalog_laptops.json")
 CHROMA_DIR = os.path.join(DATA_DIR, "chroma_db")
 CATALOG_COLLECTION = "laptop_catalog"
 
-_openai_client: OpenAI | None = None
+_embed_model: SentenceTransformer | None = None
 _chroma_client: chromadb.PersistentClient | None = None
 
 
@@ -37,11 +37,11 @@ _chroma_client: chromadb.PersistentClient | None = None
 # ---------------------------------------------------------------------------
 
 
-def _get_openai() -> OpenAI:
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = OpenAI()
-    return _openai_client
+def _get_embed_model() -> SentenceTransformer:
+    global _embed_model
+    if _embed_model is None:
+        _embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _embed_model
 
 
 def _get_chroma() -> chromadb.PersistentClient:
@@ -69,7 +69,7 @@ def product_to_text(product: dict) -> str:
         f"Producto: {product['nombre']}\n"
         f"Marca: {product['marca']}\n"
         f"Categoría: {product['categoria']}\n"
-        f"Precio: ${product['precio_cop']:,} COP\n"
+        f"Precio: {product['precio_cop']:,} pesos colombianos (COP)\n"
         f"Stock disponible: {product['stock']} unidades\n"
         f"Procesador: {product['procesador']} ({product['nucleos']} núcleos)\n"
         f"RAM: {product['ram_gb']}GB\n"
@@ -88,12 +88,9 @@ def product_to_text(product: dict) -> str:
 
 
 def get_embedding(text: str) -> list[float]:
-    """Obtiene embedding con text-embedding-3-small."""
-    response = _get_openai().embeddings.create(
-        model="text-embedding-3-small",
-        input=text,
-    )
-    return response.data[0].embedding
+    """Obtiene embedding local con sentence-transformers (sin API key)."""
+    model = _get_embed_model()
+    return model.encode(text, normalize_embeddings=True).tolist()
 
 
 # ---------------------------------------------------------------------------

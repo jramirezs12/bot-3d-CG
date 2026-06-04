@@ -279,6 +279,100 @@ app.post('/api/rag/index-catalog', async (_req, res) => {
 })
 
 // ---------------------------------------------------------------------------
+// Visión por cámara — identifica producto → cruza con catálogo RAG
+// ---------------------------------------------------------------------------
+
+app.post('/api/vision', async (req, res) => {
+  try {
+    const { image } = req.body || {}
+    if (!image) return res.status(400).json({ error: 'Falta image (base64)' })
+
+    // ── Paso 1: identificar qué hay en la imagen ─────────────────────────
+    const identifyPrompt =
+      'Identifica qué laptop o dispositivo tecnológico aparece en esta imagen. ' +
+      'Responde SOLO con el nombre del producto (marca y modelo si los ves), ' +
+      'o si no hay tecnología, describe brevemente en una sola frase qué ves. ' +
+      'Responde en español, sé muy conciso.'
+
+    const visionR = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_KEY}` },
+      body: JSON.stringify({
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text',      text: identifyPrompt },
+            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image}` } },
+          ],
+        }],
+        max_tokens: 80,
+      }),
+    })
+
+    if (!visionR.ok) {
+      const txt = await visionR.text()
+      console.error('Vision API error:', visionR.status, txt)
+      return res.status(502).json({ error: 'Error al identificar la imagen' })
+    }
+
+    const visionJson = await visionR.json()
+    const identified = visionJson?.choices?.[0]?.message?.content?.trim() || ''
+    if (!identified) return res.json({ reply: 'No pude identificar nada en la imagen.', sources: [] })
+
+    console.log('[Vision] Identificado:', identified)
+
+    // ── Paso 2: cruzar con catálogo RAG ──────────────────────────────────
+    try {
+      const ragR = await fetch(`${RAG_SERVICE_URL}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: `Tengo frente a mí: "${identified}". ¿Tienen este producto o algo similar en el catálogo? Dame información de precio, specs y disponibilidad.`,
+          intent: 'especificaciones',
+        }),
+        signal: AbortSignal.timeout(20000),
+      })
+
+      if (ragR.ok) {
+        const ragJson = await ragR.json()
+        if (ragJson.source_type === 'catalog') {
+          return res.json({
+            reply: `📷 Veo: *${identified}*\n\n${ragJson.answer}`,
+            sources: ragJson.sources || [],
+            identified,
+          })
+        }
+      }
+    } catch (ragErr) {
+      console.warn('RAG no disponible para visión:', ragErr.message)
+    }
+
+    // ── Paso 3: fallback — LLM directo con lo identificado ───────────────
+    const llmR = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENAI_KEY}` },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        messages: [
+          { role: 'system', content: 'Eres el asistente de Ktronix, tienda de laptops colombiana. Responde en español.' },
+          { role: 'user',   content: `Veo un "${identified}". ¿Pueden darme información sobre este producto o similares en su catálogo?` },
+        ],
+        max_tokens: 350,
+      }),
+    })
+
+    const llmJson = await llmR.json()
+    const answer = llmJson?.choices?.[0]?.message?.content?.trim() || 'No encontré información sobre ese producto.'
+    res.json({ reply: `📷 Veo: *${identified}*\n\n${answer}`, sources: [], identified })
+
+  } catch (err) {
+    console.error('Vision pipeline error:', err)
+    res.status(500).json({ error: 'Error en el análisis visual' })
+  }
+})
+
+// ---------------------------------------------------------------------------
 // Servidor
 // ---------------------------------------------------------------------------
 
