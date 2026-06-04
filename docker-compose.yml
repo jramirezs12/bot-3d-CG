@@ -38,13 +38,14 @@ services:
 
   # ── Frontend (React + Vite → nginx) ────────────────────────────────────────
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        BACKEND_HOST: backend:3001    # docker interno → nombre del servicio
     container_name: ktronix_frontend
     restart: unless-stopped
     ports:
       - "5173:80"
-    environment:
-      - BACKEND_HOST=backend:3001   # en docker-compose el backend se llama "backend"
     depends_on:
       - backend
 
